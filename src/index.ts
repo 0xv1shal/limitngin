@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from "express";
-import { LimitNgin, LimitNginConfig } from "./core/limitNgin";
+import { LimitNgin, LimitNginConfig } from "./core/limitNgin.js";
 
 function createLimitNginObject(config?: LimitNginConfig) {
 

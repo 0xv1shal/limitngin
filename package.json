@@ -2,10 +2,15 @@
   "name": "limitngin",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "test": "jest",
-    "prepare": "husky"
+    "prepare": "husky",
+    "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json"
   },
   "repository": {
     "type": "git",
@@ -14,7 +19,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/Termux-Dark-Dev/limitngin/issues"
   },
@@ -27,6 +32,13 @@
     "ts-jest": "^29.4.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/esm/index.d.ts"
+    }
   },
   "peerDependencies": {
     "express": "5.1.0"
