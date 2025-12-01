@@ -1,0 +1,34 @@
+{
+  "name": "limitngin",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "prepare": "husky"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Termux-Dark-Dev/limitngin.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Termux-Dark-Dev/limitngin/issues"
+  },
+  "homepage": "https://github.com/Termux-Dark-Dev/limitngin#readme",
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/jest": "^30.0.0",
+    "husky": "^9.1.7",
+    "jest-html-reporter": "^4.3.0",
+    "ts-jest": "^29.4.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "express": "5.1.0"
+  }
+}
