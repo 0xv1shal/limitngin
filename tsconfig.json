@@ -1,6 +1,11 @@
 {
   "compilerOptions": {
     "rootDir": "./src",
+    "outDir": "./dist",
+
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
     "target": "ES2019",
 
     "declaration": true,
@@ -13,5 +18,5 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts"]
 }
