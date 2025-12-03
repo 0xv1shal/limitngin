@@ -1,6 +1,6 @@
 {
   "name": "limitngin",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "rate limiter for express",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,7 +10,7 @@
   "scripts": {
     "test": "jest",
     "prepare": "husky",
-    "build": "tsc -p tsconfig.cjs.json && tsc -p tsconfig.esm.json"
+    "build":"tsc -p tsconfig.json"
   },
   "repository": {
     "type": "git",
@@ -41,7 +41,6 @@
   "url": "https://github.com/0xv1shal"
 },
   "license": "MIT",
-  "type": "module",
   "bugs": {
     "url": "https://github.com/Termux-Dark-Dev/limitngin/issues"
   },
@@ -57,11 +56,11 @@
   },
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/esm/index.d.ts"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     }
   },
+  "type": "module",
   "peerDependencies": {
     "express": "*"
   }
