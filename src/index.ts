@@ -5,7 +5,9 @@ function createLimitNginObject(config?: LimitNginConfig) {
 
   const lnObject = new LimitNgin(config);
   return (req: Request, res: Response, next: NextFunction) =>
+  {
     lnObject.listen(req, res, next);
+  }
 }
 
 export default createLimitNginObject;
