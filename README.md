@@ -1,28 +1,42 @@
 # limitngin
 
-A lightweight, zero-dependency **ESM-only** rate limiter middleware for **Express**.  
-Implements a simple and efficient fixed-interval request counter using an in-memory store.
+A lightweight, zero-dependency, ESM-only rate limiter middleware for
+Express.
 
-The package exports a **default ESM function** that creates a `LimitNgin` instance and returns a ready-to-use Express middleware.
+`limitngin` provides a simple and efficient fixed-interval rate limiting
+strategy using an in-memory store. It supports both IP-based and
+auth-token--based blocking with standardized RateLimit headers.
 
----
+Designed for simplicity, performance, and clarity.
+
+------------------------------------------------------------------------
 
 ## Installation
 
-```bash
 npm install limitngin
-```
 
----
+------------------------------------------------------------------------
 
-## Quick Start (Express — ESM Only)
+## Requirements
 
-```ts
+-   Node.js 18+
+-   Express 4.x or 5.x
+-   ESM environment ("type": "module" in package.json)
+
+This package is pure ESM.\
+`require()` is not supported.
+
+------------------------------------------------------------------------
+
+## Quick Start (Global Middleware - IP Based)
+
+``` ts
 import express from "express";
 import limitNgin from "limitngin";
 
 const app = express();
 
+// Apply globally to all routes
 app.use(
   limitNgin({
     intervalInSec: 60,
@@ -30,92 +44,205 @@ app.use(
   })
 );
 
-app.get("/", (req, res) => {
-  res.json({ message: "OK" });
-});
-
-app.listen(3000, () => console.log("server running"));
+app.listen(3000);
 ```
 
-> **Note:**  
-> This package is **pure ESM**.  
-> Use `import` — `require()` is not supported.
+------------------------------------------------------------------------
 
----
+## Route-Specific Rate Limiting
 
-## API
+You can apply different configurations to different routes.
 
-### Default Export
+### Example: Login API (Strict Limit)
 
-```ts
-limitNgin(config?: LimitNginConfig)
+``` ts
+app.post(
+  "/login",
+  limitNgin({
+    intervalInSec: 60,
+    allowedNoOfRequests: 5
+  }),
+  loginController
+);
 ```
 
-Returns an Express middleware function that performs rate limiting.
+### Example: OTP API (Very Strict Limit)
 
----
+``` ts
+app.post(
+  "/send-otp",
+  limitNgin({
+    intervalInSec: 300,
+    allowedNoOfRequests: 3
+  }),
+  otpController
+);
+```
+
+### Example: Public API (Relaxed Limit)
+
+``` ts
+app.get(
+  "/products",
+  limitNgin({
+    intervalInSec: 60,
+    allowedNoOfRequests: 200
+  }),
+  productsController
+);
+```
+
+Each route gets its own independent rate-limiting store.
+
+------------------------------------------------------------------------
+
+## Auth Token--Based Limiting
+
+Instead of blocking per IP, you can block per user/session/token.
+
+``` ts
+app.use(
+  limitNgin({
+    intervalInSec: 60,
+    allowedNoOfRequests: 5,
+    blocks: "auth_token",
+    tokenProvider: (req) => {
+      return req.headers.authorization ?? "";
+    }
+  })
+);
+```
+
+`tokenProvider` must return a unique string identifier per user/session.
+
+------------------------------------------------------------------------
 
 ## Configuration
 
-```ts
-export type LimitNginConfig = {
-  intervalInSec: number;
-  allowedNoOfRequests: number;
-};
+``` ts
+type LimitNginConfig =
+  | {
+      intervalInSec: number;
+      allowedNoOfRequests: number;
+      customMessage?: string;
+      customHeaders?: Record<string, any>;
+      blocks?: "ip_addr";
+    }
+  | {
+      intervalInSec: number;
+      allowedNoOfRequests: number;
+      customMessage?: string;
+      customHeaders?: Record<string, any>;
+      blocks: "auth_token";
+      tokenProvider: (req, res) => string;
+    };
 ```
 
-### Defaults
+------------------------------------------------------------------------
 
-```ts
-intervalInSec: 60
-allowedNoOfRequests: 100
-```
+## Default Values
 
----
+intervalInSec: 60\
+allowedNoOfRequests: 100\
+blocks: "ip_addr"
 
-## How It Works
+------------------------------------------------------------------------
 
-The middleware maintains a simple in-memory store:
+## Standard Response Headers
 
-```ts
-{
-  "<ip>": {
-    req_count: number;
-    created_at: number;
+When a request is blocked, the middleware sets:
+
+RateLimit-Limit\
+RateLimit-Remaining\
+RateLimit-Reset
+
+### Header Details
+
+-   RateLimit-Limit → Maximum allowed requests in interval\
+-   RateLimit-Remaining → Remaining requests before blocking\
+-   RateLimit-Reset → Seconds remaining before window resets (float)
+
+------------------------------------------------------------------------
+
+## Custom Headers
+
+You can attach additional headers to blocked responses:
+
+``` ts
+limitNgin({
+  intervalInSec: 60,
+  allowedNoOfRequests: 10,
+  customHeaders: {
+    "X-App-Version": "1.2.3"
   }
-}
+});
 ```
 
----
+------------------------------------------------------------------------
 
-## Automatic Cleanup
+## Custom Error Message
 
-Runs every:
-
+``` ts
+limitNgin({
+  intervalInSec: 60,
+  allowedNoOfRequests: 10,
+  customMessage: "Rate limit exceeded"
+});
 ```
-max(intervalInSec, 60) seconds
-```
 
----
+Default response:
 
-## Example Blocked Response
-
-```json
+``` json
 {
   "message": "too many request"
 }
 ```
 
----
+------------------------------------------------------------------------
 
-## Upcoming Enhancements
+## How It Works
 
-- Retry-After header
-- Better cleanup
-- Pluggable storage adapters
-- Framework-agnostic version
+The middleware maintains an in-memory store:
 
----
+`{ <blocking_key>: { req_count: number, created_at: number } }`
+
+The blocking key is either:
+
+-   Client IP address
+-   Token returned by `tokenProvider`
+
+Each limiter instance maintains its own independent store.
+
+------------------------------------------------------------------------
+
+## Automatic Cleanup
+
+Expired entries are cleaned periodically:
+
+max(intervalInSec, 60) seconds
+
+------------------------------------------------------------------------
+
+## Limitations
+
+-   In-memory store (not distributed)
+-   Not suitable for multi-instance deployments
+-   Not recommended for horizontally scaled environments
+-   No Redis or external storage support (yet)
+
+For production systems with multiple replicas, use a shared store
+solution.
+
+------------------------------------------------------------------------
+
+## Roadmap
+
+-   Retry-After header support
+-   Pluggable storage adapters (Redis, etc.)
+-   Sliding window strategy
+-   Improved cleanup strategy
+
+------------------------------------------------------------------------
 
 ## License
 
