@@ -1,9 +1,23 @@
 import { Request, Response, NextFunction } from "express";
 
-export type LimitNginConfig = {
+type BaseConfig = {
   intervalInSec: number;
   allowedNoOfRequests: number;
+  customMessage?: string;
+  customHeaders?: Record<string, any>;
 };
+
+type IpBlockConfig = BaseConfig & {
+  blocks?: "ip_addr"; // default case
+  tokenProvider?: never; // not allowed
+};
+
+type AuthBlockConfig = BaseConfig & {
+  blocks: "auth_token";
+  tokenProvider: (req: Request, res: Response) => string;
+};
+
+export type LimitNginConfig = IpBlockConfig | AuthBlockConfig;
 
 type ReqEntry = {
   req_count: number;
@@ -17,22 +31,67 @@ export class LimitNgin {
   #reqMemStore: ReqMemoryStore; // storing requests data in mem
 
   constructor(config?: LimitNginConfig) {
-    this.config = {
-    intervalInSec: config?.intervalInSec ?? 60,
-    allowedNoOfRequests: config?.allowedNoOfRequests ?? 100,
-  };
+    const resolvedConfig = config ?? {
+      intervalInSec: 60,
+      allowedNoOfRequests: 100,
+      blocks: "ip_addr",
+    };
+
+    const baseConfig = {
+      intervalInSec: resolvedConfig.intervalInSec ?? 60,
+      allowedNoOfRequests: resolvedConfig.allowedNoOfRequests ?? 100,
+      customMessage: resolvedConfig.customMessage,
+      customHeaders: resolvedConfig.customHeaders,
+    };
+
+    if (resolvedConfig.blocks === "auth_token") {
+      this.config = {
+        ...baseConfig,
+        blocks: "auth_token",
+        tokenProvider: resolvedConfig.tokenProvider,
+      };
+    } else {
+      this.config = {
+        ...baseConfig,
+        blocks: "ip_addr",
+      };
+    }
+
     this.#reqMemStore = {};
 
-    // cleaning up every interval or sec
-    setInterval(()=>this.#cleanup(),Math.max(this.config.intervalInSec,60)*1000)
+    setInterval(
+      () => this.#cleanup(),
+      Math.max(this.config.intervalInSec, 60) * 1000,
+    );
   }
 
   listen(req: Request, res: Response, next: NextFunction) {
-    const ip = req.ip?.replace("::ffff:", "") ?? "";
+    let blockingKey: string = "";
+    if (this.config.blocks === "ip_addr") {
+      blockingKey = req.ip?.replace("::ffff:", "") ?? "";
+    } else {
+      if (!this.config.tokenProvider)
+        throw Error(
+          "LIMITNGIN_ERROR: BLOCKS is SET auth_token but no TOKEN_PROVIDER was found",
+        );
+      blockingKey = this.config.tokenProvider(req, res);
+    }
 
-    if (this.#shouldBlock(ip)) {
+    if (this.#shouldBlock(blockingKey)) {
+      res.set({
+        "RateLimit-Limit": this.config.allowedNoOfRequests,
+        "RateLimit-Remaining":
+          this.config.allowedNoOfRequests -
+          this.#reqMemStore[blockingKey].req_count,
+        "RateLimit-Reset":
+          (this.config.intervalInSec * 1000 +
+            this.#reqMemStore[blockingKey].created_at -
+            Date.now()) /
+          1000,
+        ...this.config.customHeaders,
+      });
       return res.status(429).json({
-        message: "too many request",
+        message: this.config.customMessage ?? "too many request",
       });
     }
 
@@ -52,12 +111,10 @@ export class LimitNgin {
       return false;
     } else {
       const withinInterval =
-        this.#calculateTimeDiff(entry.created_at) <
-        this.config.intervalInSec; // checks if request has came under the same interval time
+        this.#calculateTimeDiff(entry.created_at) < this.config.intervalInSec; // checks if request has came under the same interval time
 
       const underLimit =
-        entry.req_count< this.config.allowedNoOfRequests &&
-        withinInterval;
+        entry.req_count < this.config.allowedNoOfRequests && withinInterval;
 
       if (!withinInterval) {
         // this will run when the time interval is over for a particular req
