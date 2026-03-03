@@ -1,10 +1,20 @@
 import { Request, Response, NextFunction } from "express";
+import { MemSlidingWindowCounter, MemTokenBucket } from "./mem.algo.js";
 
 type BaseConfig = {
   intervalInSec: number;
-  allowedNoOfRequests: number;
   customMessage?: string;
   customHeaders?: Record<string, any>;
+};
+
+type TokenBucketAlgoConfig = BaseConfig & {
+  algorithm: "token_bucket";
+  capacity: number;
+};
+
+type SlidingWindowAlgoConfig = BaseConfig & {
+  algorithm?: "sliding_window_counter";
+  allowedNoOfRequests: number;
 };
 
 type IpBlockConfig = BaseConfig & {
@@ -17,79 +27,76 @@ type AuthBlockConfig = BaseConfig & {
   tokenProvider: (req: Request, res: Response) => string;
 };
 
-export type LimitNginConfig = IpBlockConfig | AuthBlockConfig;
-
-type ReqEntry = {
-  req_count: number;
-  created_at: number;
-};
-
-type ReqMemoryStore = Record<string, ReqEntry>;
+export type LimitNginConfig = BaseConfig &
+  (TokenBucketAlgoConfig | SlidingWindowAlgoConfig) &
+  (IpBlockConfig | AuthBlockConfig);
 
 export class LimitNgin {
-  config: LimitNginConfig;
-  #reqMemStore: ReqMemoryStore; // storing requests data in mem
+  public config: LimitNginConfig;
+  #class: MemTokenBucket | MemSlidingWindowCounter | null = null;
 
   constructor(config?: LimitNginConfig) {
-    const resolvedConfig = config ?? {
-      intervalInSec: 60,
-      allowedNoOfRequests: 100,
-      blocks: "ip_addr",
+    const baseConfig: BaseConfig = {
+      intervalInSec: config?.intervalInSec ?? 60,
+      customMessage: config?.customMessage,
+      customHeaders: config?.customHeaders,
     };
 
-    const baseConfig = {
-      intervalInSec: resolvedConfig.intervalInSec ?? 60,
-      allowedNoOfRequests: resolvedConfig.allowedNoOfRequests ?? 100,
-      customMessage: resolvedConfig.customMessage,
-      customHeaders: resolvedConfig.customHeaders,
-    };
-
-    if (resolvedConfig.blocks === "auth_token") {
+    // if algo is not present choose sliding_window_counter
+    if (!config?.algorithm || config.algorithm === "sliding_window_counter") {
       this.config = {
         ...baseConfig,
-        blocks: "auth_token",
-        tokenProvider: resolvedConfig.tokenProvider,
+        algorithm: "sliding_window_counter",
+        allowedNoOfRequests: config?.allowedNoOfRequests ?? 60,
+      };
+    } else if (config.algorithm === "token_bucket") {
+      this.config = {
+        ...baseConfig,
+        algorithm: "token_bucket",
+        capacity: config.capacity ?? 10,
       };
     } else {
-      this.config = {
-        ...baseConfig,
-        blocks: "ip_addr",
-      };
+      throw Error("NO PROPER ALGO SELECTED");
     }
 
-    this.#reqMemStore = {};
-
-    setInterval(
-      () => this.#cleanup(),
-      Math.max(this.config.intervalInSec, 60) * 1000,
-    );
+    if (!config?.blocks || config.blocks === "ip_addr") {
+      this.config = {
+        ...this.config,
+        blocks: "ip_addr",
+      };
+    } else {
+      if (!config.tokenProvider) throw new Error("TOKEN PROVIDER IS REQUIRED");
+      this.config = {
+        ...this.config,
+        blocks: "auth_token",
+        tokenProvider: config.tokenProvider,
+      };
+    }
   }
 
   listen(req: Request, res: Response, next: NextFunction) {
-    let blockingKey: string = "";
-    if (this.config.blocks === "ip_addr") {
-      blockingKey = req.ip?.replace("::ffff:", "") ?? "";
-    } else {
-      if (!this.config.tokenProvider)
-        throw Error(
-          "LIMITNGIN_ERROR: BLOCKS is SET auth_token but no TOKEN_PROVIDER was found",
-        );
-      blockingKey = this.config.tokenProvider(req, res);
-    }
+    const key = this.#resolveBlockingKey(req, res);
+    const algo = this.#resolveAlgorithmClass();
 
-    if (this.#shouldBlock(blockingKey)) {
-      res.set({
-        "RateLimit-Limit": this.config.allowedNoOfRequests,
-        "RateLimit-Remaining":
-          this.config.allowedNoOfRequests -
-          this.#reqMemStore[blockingKey].req_count,
-        "RateLimit-Reset":
-          (this.config.intervalInSec * 1000 +
-            this.#reqMemStore[blockingKey].created_at -
-            Date.now()) /
-          1000,
-        ...this.config.customHeaders,
-      });
+    const blocked = algo.shouldBlock(key);
+
+    const remaining = algo.getRemaining(key);
+    const resetMs = algo.getResetMs(key);
+
+    res.set({
+      "RateLimit-Limit":
+        this.config.algorithm === "sliding_window_counter"
+          ? this.config.allowedNoOfRequests
+          : this.config.algorithm === "token_bucket"
+            ? this.config.capacity
+            : 0,
+      "RateLimit-Remaining": remaining,
+      "RateLimit-Reset": Math.ceil(resetMs / 1000), // spec expects seconds
+      ...(blocked && { "Retry-After": Math.ceil(resetMs / 1000) }),
+      ...this.config.customHeaders,
+    });
+
+    if (blocked) {
       return res.status(429).json({
         message: this.config.customMessage ?? "too many request",
       });
@@ -98,52 +105,36 @@ export class LimitNgin {
     next();
   }
 
-  // will return true if the request needs to be blocked otherwise false
-  #shouldBlock(ip: string): boolean {
-    const entry = this.#reqMemStore[ip];
-
-    // this will run if a new request has came first time
-    if (!entry) {
-      this.#reqMemStore[ip] = {
-        req_count: 1,
-        created_at: Date.now(),
-      };
-      return false;
-    } else {
-      const withinInterval =
-        this.#calculateTimeDiff(entry.created_at) < this.config.intervalInSec; // checks if request has came under the same interval time
-
-      const underLimit =
-        entry.req_count < this.config.allowedNoOfRequests && withinInterval;
-
-      if (!withinInterval) {
-        // this will run when the time interval is over for a particular req
-        this.#reqMemStore[ip] = {
-          req_count: 1,
-          created_at: Date.now(),
-        };
-        return false;
-      } else if (underLimit) {
-        entry.req_count += 1;
-        return false;
-      } else {
-        return true;
-      }
+  #resolveBlockingKey(req: Request, res: Response): string {
+    if (this.config.blocks === "ip_addr") {
+      return req.ip?.replace("::ffff:", "") ?? "unknown";
     }
+
+    if (!this.config.tokenProvider)
+      throw new Error(
+        "LIMITNGIN_ERROR: BLOCKS is SET auth_token but no TOKEN_PROVIDER was found",
+      );
+
+    return this.config.tokenProvider(req, res);
   }
 
-  #calculateTimeDiff(created_at: number): number {
-    return (Date.now() - created_at) / 1000;
-  }
-
-  #cleanup() {
-    for (const key in this.#reqMemStore) {
-      if (
-        (Date.now() - this.#reqMemStore[key]!.created_at) / 1000 >
-        this.config.intervalInSec
-      ) {
-        delete this.#reqMemStore[key];
+  #resolveAlgorithmClass(): MemTokenBucket | MemSlidingWindowCounter {
+    const intervalMs = this.config.intervalInSec * 1000;
+    if (this.config.algorithm === "token_bucket") {
+      if (this.#class === null) {
+        this.#class = new MemTokenBucket(this.config.capacity, intervalMs);
       }
+
+      return this.#class;
+    } else {
+      if (this.#class === null) {
+        this.#class = new MemSlidingWindowCounter(
+          this.config.allowedNoOfRequests,
+          intervalMs,
+        );
+      }
+
+      return this.#class;
     }
   }
 }
